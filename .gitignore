@@ -1,0 +1,20 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# PyCharm
+.idea/
+
+# Логи и артефакты (генерируются)
+logs/*.log
+logs/*.json
+
+# Данные модели (скачиваются локально)
+ollama-data/
+
+# OS
+.DS_Store
+Thumbs.db

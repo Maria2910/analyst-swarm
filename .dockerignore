@@ -1,0 +1,13 @@
+venv/
+.idea/
+__pycache__/
+*.pyc
+*.log
+logs/
+memory/journal.md
+*.md
+!SOUL.md
+.git/
+.gitignore
+docker-compose.yml
+Dockerfile

@@ -1,0 +1,66 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - agent-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analyst-swarm-agent
+
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+          pids: 100
+
+    read_only: true
+
+    tmpfs:
+      - /tmp:size=100M
+
+    volumes:
+      - ./memory:/app/memory:rw
+      - ./skills:/app/skills:ro
+      - ./agents:/app/agents:ro
+      - ./logs:/app/logs:rw
+      - ./data:/app/data:ro       # данные только для чтения
+      - ./reports:/app/reports:rw # отчёты агент может писать
+
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - MPLCONFIGDIR=/tmp/matplotlib
+
+    networks:
+      - agent-net
+
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    cap_drop:
+      - ALL
+
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  agent-net:
+    driver: bridge
+
+volumes:
+  ollama-data:
