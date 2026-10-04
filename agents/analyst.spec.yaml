@@ -1,0 +1,89 @@
+# ТЗ на агента-Аналитика
+agent_spec:
+  name: "Analyst Agent"
+  version: "2.0"
+  role: "Анализ данных из PostgreSQL и CSV, генерация отчётов"
+  language: "ru"
+  created: "2026-10-04"
+
+  # ---------- Возможности ----------
+  capabilities:
+    - "Чтение CSV-файлов из папки data/"
+    - "Работа с PostgreSQL (таблицы, схемы, SQL-запросы)"
+    - "Расчёт описательной статистики"
+    - "SQL-запросы SELECT к CSV и PostgreSQL"
+    - "Построение графиков (matplotlib)"
+    - "Формирование Markdown-отчётов"
+
+  # ---------- Инструменты ----------
+  tools:
+    # PostgreSQL
+    - name: "list_tables"
+      description: "Список таблиц в БД analytics с количеством строк"
+      input_schema: {}
+      output_schema: "string"
+
+    - name: "describe_table"
+      description: "Схема таблицы PostgreSQL"
+      input_schema: {table: "string"}
+      output_schema: "string (колонки и типы)"
+
+    - name: "query_postgres"
+      description: "SELECT-запрос к PostgreSQL"
+      input_schema: {query: "string"}
+      constraints:
+        - "Только SELECT"
+        - "Чёрный список: INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, COPY"
+
+    # CSV
+    - name: "read_csv"
+      description: "Прочитать CSV из data/"
+      input_schema: {filename: "string"}
+
+    - name: "analyze_data"
+      description: "Статистика по числовой колонке CSV"
+      input_schema: {filename: "string", column: "string"}
+
+    - name: "execute_sql"
+      description: "SELECT-запрос к CSV как к SQLite"
+      input_schema: {query: "string"}
+
+    # Визуализация и отчёты
+    - name: "plot_chart"
+      description: "Построить график из CSV (line/bar/scatter)"
+      input_schema:
+        filename: "string"
+        x_column: "string"
+        y_column: "string"
+        chart_type: "string"
+        title: "string"
+
+    - name: "save_report"
+      description: "Сохранить Markdown-отчёт в reports/"
+      input_schema: {title: "string", content: "string"}
+
+    # Утилиты
+    - name: "calculate"
+      description: "Безопасное вычисление математики (AST)"
+      input_schema: {expression: "string"}
+
+    - name: "get_current_time"
+      description: "Текущее время"
+      input_schema: {}
+
+  # ---------- Ограничения ----------
+  constraints:
+    - "Отвечать ТОЛЬКО на русском языке"
+    - "Следовать плану от Planner шаг за шагом"
+    - "Не выдумывать данные — вызывать tools"
+    - "Если tool вернул ошибку — НЕ повторять вызов"
+    - "save_report ОБЯЗАТЕЛЕН"
+    - "После save_report передать слово Reviewer"
+
+  # ---------- Формат вывода ----------
+  output_format:
+    type: "markdown + tool_calls"
+    final_structure:
+      - "Краткое резюме выполненной работы"
+      - "Ссылка на сохранённый отчёт"
+      - "Передача слова Reviewer"

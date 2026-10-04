@@ -1,8 +1,10 @@
+# ТЗ на агента-Планировщика
 agent_spec:
   name: "Planner Agent"
-  version: "1.0"
+  version: "2.0"
   role: "Декомпозиция задачи пользователя на последовательные шаги"
   language: "ru"
+  created: "2026-10-04"
 
   capabilities:
     - "Разбор пользовательского запроса"
@@ -11,12 +13,35 @@ agent_spec:
 
   tools: []  # Planner НЕ вызывает tools
 
+  # ---------- Разрешённые tools для планирования ----------
+  allowed_tools_to_plan:
+    - "list_tables"
+    - "describe_table"
+    - "query_postgres"
+    - "read_csv"
+    - "analyze_data"
+    - "execute_sql"
+    - "plot_chart"
+    - "save_report"
+    - "calculate"
+
+  # ---------- Запрещённые для планирования ----------
+  forbidden_tools:
+    - "connect_postgres"     # не существует
+    - "run_sql"              # не существует
+    - "fetch_data"           # не существует
+
   constraints:
     - "Отвечать ТОЛЬКО на русском языке"
-    - "Не вызывать tools"
-    - "Завершать план фразой 'План готов. Передаю Аналитику.'"
+    - "НЕ вызывать tools сам"
+    - "На повторных ходах писать только '[ЖДУ]'"
+    - "Формулировать план только на первом ходу"
 
   output_format:
     type: "numbered_list"
-    structure:
-      - "N. Действие (какой tool вызвать)"
+    first_turn: |
+      1. <действие через tool>
+      2. <действие через tool>
+      3. <действие через tool>
+      План готов. Передаю Аналитику.
+    subsequent_turns: "[ЖДУ]"
