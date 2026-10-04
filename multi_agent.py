@@ -6,9 +6,6 @@ from memory_store import save_session, recall_last
 
 log = get_logger("multi_agent")
 
-# Берём URL Ollama из переменной окружения.
-# На хосте (PyCharm) её нет → localhost.
-# В Docker она передаётся через docker-compose → host.docker.internal.
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 
 llm_config = {
@@ -24,95 +21,134 @@ llm_config = {
     "top_p": 0.9,
 }
 
-# --- Агенты ---
+# ============================================================
+# Агент 1: Planner — планирует, но не выполняет
+# ============================================================
+
+planner = AssistantAgent(
+    name="Planner",
+    llm_config=llm_config,
+    system_message=(
+        "Ты — Планировщик. Разбей запрос пользователя на 3-4 шага.\n\n"
+        "ДОСТУПНЫЕ ИНСТРУМЕНТЫ (планируй только их):\n"
+        "- list_tables — список таблиц в БД\n"
+        "- describe_table — схема таблицы\n"
+        "- query_postgres — SQL-запрос к БД\n"
+        "- save_report — сохранение Markdown-отчёта\n\n"
+        "ВАЖНО:\n"
+        "- Для работы с PostgreSQL используй только эти 4 инструмента\n"
+        "- НЕ включай в план plot_chart, read_csv, analyze_data — "
+        "они работают только с CSV-файлами, а не с БД\n"
+        "- НЕ включай connect_postgres — такого инструмента нет\n\n"
+        "ПРАВИЛО ПОВТОРНОГО ХОДА:\n"
+        "Если в истории чата уже есть твой план — напиши только '[ЖДУ]' "
+        "и больше ничего.\n\n"
+        "ФОРМАТ ПЕРВОГО ОТВЕТА:\n"
+        "1. <действие>\n2. <действие>\n3. <действие>\n"
+        "План готов. Передаю Аналитику.\n\n"
+        "Отвечай ТОЛЬКО на русском языке."
+    )
+)
+
+# ============================================================
+# Агент 2: Analyst — выполняет план
+# ============================================================
+
 analyst = AssistantAgent(
     name="Analyst",
     llm_config=llm_config,
     system_message=(
-        "Ты — Аналитик данных. У тебя есть инструменты:\n"
-        "- read_csv, analyze_data, execute_sql, plot_chart, save_report\n\n"
-        "САМОЕ ВАЖНОЕ ПРАВИЛО:\n"
-        "Пока ты не вызвал save_report — задача НЕ ВЫПОЛНЕНА.\n"
-        "save_report — ЭТО ФИНАЛЬНЫЙ ОБЯЗАТЕЛЬНЫЙ ШАГ.\n\n"
-        "ПЛАН:\n"
-        "1. read_csv('sales.csv')\n"
-        "2. analyze_data('sales.csv', 'sales')\n"
-        "3. execute_sql('SELECT region, SUM(sales) as total FROM sales GROUP BY region')\n"
-        "4. plot_chart('sales.csv', 'region', 'sales', 'bar', 'Продажи по регионам')\n"
-        "5. save_report('Анализ продаж', '# Анализ продаж\\n\\n## Статистика\\n...\\n## Сводка по регионам\\n...')\n"
-        "6. Только ПОСЛЕ save_report — напиши краткое резюме и передай слово Reviewer\n\n"
+        "Ты — Аналитик данных. Выполняй план от Планировщика.\n\n"
+        "Доступные инструменты:\n"
+        "- list_tables, describe_table, query_postgres\n"
+        "- read_csv, analyze_data, execute_sql\n"
+        "- plot_chart, save_report, calculate\n\n"
         "КРИТИЧЕСКИ ВАЖНО:\n"
-        "- save_report ОБЯЗАТЕЛЕН. Без него задача считается проваленной.\n"
-        "- Отвечай ТОЛЬКО на русском языке.\n"
-        "- НЕ пропускай шаги."
+        "- Отвечай ТОЛЬКО на русском языке\n"
+        "- Следуй плану шаг за шагом\n"
+        "- Вызывай tools, не выдумывай данные\n\n"
+        "ПРАВИЛА ОБРАБОТКИ ОШИБОК:\n"
+        "- Если tool вернул ошибку 'Файл не найден' — НЕ повторяй тот же вызов. "
+        "Переходи к следующему шагу плана или заверши работу.\n"
+        "- Если после 2 неудачных попыток не получается — "
+        "просто переходи к save_report с тем, что есть.\n"
+        "- НЕ зацикливайся на одном tool.\n\n"
+        "- save_report ОБЯЗАТЕЛЕН. После него передай слово Reviewer."
+        "ПОСЛЕ save_report:\n"
+        "- Напиши 'Отчёт сохранён. Передаю Reviewer.'\n"
+        "- БОЛЬШЕ НЕ ВЫЗЫВАЙ tools"
     )
 )
+
+# ============================================================
+# Агент 3: Reviewer — оценивает
+# ============================================================
 
 reviewer = AssistantAgent(
     name="Reviewer",
     llm_config=llm_config,
     system_message=(
-        "Ты — Рецензент. Аналитик уже выполнил работу.\n"
-        "Твоя задача:\n"
-        "1. Проверить инсайты Аналитика\n"
-        "2. Указать на слабые места\n"
-        "3. Дать оценку от 1 до 10\n\n"
+        "Ты — Рецензент. Проверь работу Аналитика:\n"
+        "1. Следовал ли он плану Планировщика?\n"
+        "2. Все ли шаги выполнены?\n"
+        "3. Есть ли слабые места?\n"
+        "4. Оценка от 1 до 10.\n\n"
         "КРИТИЧЕСКИ ВАЖНО:\n"
         "- Отвечай ТОЛЬКО на русском языке\n"
         "- НЕ вызывай tools сам\n"
-        "- В конце напиши TERMINATE"
+        "- В конце финального ответа напиши TERMINATE"
     )
 )
+
+# ============================================================
+# Пользователь-прокси
+# ============================================================
 
 user_proxy = UserProxyAgent(
     name="User",
     human_input_mode="NEVER",
-    max_consecutive_auto_reply=6,   # ← было 4, стало 6
+    max_consecutive_auto_reply=8,
     code_execution_config=False,
     is_termination_msg=lambda msg: "TERMINATE" in (msg.get("content") or "")
 )
 
-# Регистрируем tools (calculate, get_current_time)
 setup_tools(analyst, user_proxy)
 
-# --- Групповой чат ---
+# ============================================================
+# Групповой чат с 3 агентами
+# ============================================================
+
 groupchat = GroupChat(
-    agents=[user_proxy, analyst, reviewer],
+    agents=[user_proxy, planner, analyst, reviewer],
     messages=[],
-    max_round=16,                   # ← было 14, стало 16
+    max_round=18,        # ← было 14, стало 18
     speaker_selection_method="round_robin",
 )
 
-manager = GroupChatManager(
-    groupchat=groupchat,
-    llm_config=llm_config,
-)
+manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
 
-# --- Запрос ---
+# ============================================================
+# Запрос
+# ============================================================
+
 USER_MESSAGE = (
-    "Проанализируй данные о продажах из data/sales.csv. "
-    "Найди ключевые тренды, посчитай статистику по колонке sales, "
-    "построй график продаж по регионам И ОБЯЗАТЕЛЬНО сохрани "
-    "итоговый отчёт в файл через save_report."
+    "Подключись к базе данных analytics в PostgreSQL, "
+    "посмотри какие таблицы есть, найди топ регионов по продажам, "
+    "и сохрани итоговый отчёт через save_report."
 )
 
-# --- Показываем последние записи из памяти (контекст) ---
 log.info("=== Previous memory ===")
 log.info(recall_last(2))
 
-log.info("=== Starting multi-agent chat ===")
+log.info("=== Starting multi-agent chat (3 agents) ===")
 
-result = user_proxy.initiate_chat(
-    manager,
-    message=USER_MESSAGE,
-)
+result = user_proxy.initiate_chat(manager, message=USER_MESSAGE)
 
 log.info("=== Chat finished ===")
 
-# --- Сохраняем в память ---
+# Сохраняем в память
 final_message = ""
 if result and result.chat_history:
-    # Ищем последнее сообщение Reviewer с оценкой
     for msg in reversed(result.chat_history):
         content = msg.get("content") or ""
         if "TERMINATE" in content:

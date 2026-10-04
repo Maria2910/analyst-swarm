@@ -289,7 +289,12 @@ def plot_chart(filename: str, x_column: str, y_column: str,
 
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
-        return f"Файл не найден: {filename}"
+        return (
+            f"Файл не найден: {filename}. "
+            f"plot_chart работает ТОЛЬКО с CSV-файлами из папки data/. "
+            f"Для данных из PostgreSQL сначала нужно выгрузить их в CSV. "
+            f"Если данных в CSV нет — пропусти этот шаг."
+        )
 
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -371,6 +376,135 @@ def save_report(title: str, content: str) -> str:
 
 
 # ============================================================
+# 5. Работа с PostgreSQL
+# ============================================================
+
+import psycopg2
+import psycopg2.extras
+
+
+def _pg_connect():
+    """Создаёт подключение к PostgreSQL."""
+    return psycopg2.connect(
+        host=os.environ.get("POSTGRES_HOST", "postgres"),
+        port=int(os.environ.get("POSTGRES_PORT", 5432)),
+        user=os.environ.get("POSTGRES_USER", "analyst"),
+        password=os.environ.get("POSTGRES_PASSWORD", "analyst_secret"),
+        dbname=os.environ.get("POSTGRES_DB", "analytics"),
+        connect_timeout=10,
+    )
+
+
+def list_tables() -> str:
+    """Возвращает список таблиц в БД analytics с количеством строк."""
+    try:
+        conn = _pg_connect()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            ORDER BY table_name
+        """)
+        tables = [row[0] for row in cursor.fetchall()]
+
+        if not tables:
+            conn.close()
+            return "В БД нет таблиц."
+
+        lines = [f"База данных: {os.environ.get('POSTGRES_DB', 'analytics')}", f"Таблиц: {len(tables)}", ""]
+        for table in tables:
+            cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+            count = cursor.fetchone()[0]
+            lines.append(f"  - {table}: {count} строк")
+
+        conn.close()
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Ошибка БД: {e}"
+
+
+def describe_table(table: str) -> str:
+    """Возвращает схему таблицы: колонки, типы, ограничения."""
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table):
+        return "Ошибка: недопустимое имя таблицы."
+
+    try:
+        conn = _pg_connect()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            ORDER BY ordinal_position
+        """, (table,))
+        columns = cursor.fetchall()
+
+        if not columns:
+            conn.close()
+            return f"Таблица '{table}' не найдена."
+
+        lines = [f"Схема таблицы '{table}':", ""]
+        for col, typ, nullable in columns:
+            null_marker = "" if nullable == "NO" else " NULL"
+            lines.append(f"  - {col}: {typ}{null_marker}")
+
+        conn.close()
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Ошибка БД: {e}"
+
+
+def query_postgres(query: str) -> str:
+    """Выполняет SELECT-запрос к PostgreSQL. Только чтение.
+
+    Пример: SELECT region, SUM(sales) FROM sales GROUP BY region ORDER BY 2 DESC
+    """
+    q = query.strip().lower()
+
+    # Только SELECT
+    if not q.startswith("select") and not q.startswith("with"):
+        return "Ошибка: разрешены только SELECT-запросы."
+
+    # Чёрный список
+    for forbidden in ["insert", "update", "delete", "drop", "alter",
+                      "create", "truncate", "grant", "revoke", "copy"]:
+        if re.search(rf"\b{forbidden}\b", q):
+            return f"Ошибка: запрещённая операция '{forbidden}'."
+
+    try:
+        conn = _pg_connect()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        if not rows:
+            conn.close()
+            return "Запрос вернул 0 строк."
+
+        columns = list(rows[0].keys())
+
+        # Ограничение вывода
+        truncated = len(rows) > 100
+        rows = rows[:100]
+
+        lines = [
+            f"Колонки: {columns}",
+            f"Строк: {len(rows)}" + (" (показаны первые 100)" if truncated else ""),
+            "",
+        ]
+        for row in rows:
+            lines.append(" | ".join(str(row[c]) for c in columns))
+
+        conn.close()
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Ошибка SQL: {e}"
+
+# ============================================================
 # Регистрация в AutoGen
 # ============================================================
 
@@ -386,6 +520,10 @@ def setup_tools(assistant, user_proxy):
         (execute_sql, "SELECT-запрос к CSV как к SQLite. Пример: 'SELECT region, SUM(sales) FROM sales GROUP BY region'."),
         (plot_chart, "Построить график из CSV и сохранить в reports/. Типы: line, bar, scatter."),
         (save_report, "Сохранить Markdown-отчёт в reports/."),
+        # --- PostgreSQL ---
+        (list_tables, "Список таблиц в PostgreSQL БД analytics с количеством строк."),
+        (describe_table, "Схема таблицы PostgreSQL: колонки и типы. Пример: 'sales'."),
+        (query_postgres, "SELECT-запрос к PostgreSQL. Пример: 'SELECT region, SUM(sales) FROM sales GROUP BY region'."),
     ]
 
     for func, desc in tools:
