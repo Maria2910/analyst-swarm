@@ -100,6 +100,18 @@ Linux/macOS: `make run`
 
 ---
 
+## PostgreSQL
+
+Агент работает с реальной БД PostgreSQL 17 в отдельном контейнере.
+
+- БД: `analytics` (порт `5433`)
+- Таблицы: `sales`, `customers`
+- Tools: `list_tables`, `describe_table`, `query_postgres`
+
+Подключение через pgAdmin: `localhost:5433`, user `analyst`, password `analyst_secret`.
+
+---
+
 ## Evals
 
 ```bash
